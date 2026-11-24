@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Databases & local storage
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+/storage/
+/backend/storage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
+playwright/.cache/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

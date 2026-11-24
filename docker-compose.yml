@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-sdr-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_sdr}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-ai_sdr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-sdr-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-sdr-api
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: AI SDR
+      APP_SLUG: ai-sdr
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-ai_sdr}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-mock}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-dev-insecure-secret-change-in-production-32bytes}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ai-sdr-frontend
+    ports:
+      - "3000:8080"
+    depends_on:
+      - api
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-sdr-ollama
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  postgres_data:
+  ollama_data:
