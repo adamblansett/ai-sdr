@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10001 appgroup \
     && useradd --uid 10001 --gid appgroup --shell /usr/sbin/nologin --create-home appuser
 
-COPY pyproject.toml ./
+COPY pyproject.toml alembic.ini ./
+COPY alembic ./alembic
 COPY app ./app
 RUN pip install --no-cache-dir . \
     && mkdir -p /data/storage \
