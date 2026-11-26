@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Literal, cast
@@ -13,6 +14,41 @@ from app.core.config import Settings, get_settings
 
 ActorRole = Literal["viewer", "sdr", "sales_manager", "admin"]
 VALID_ROLES: tuple[ActorRole, ...] = ("viewer", "sdr", "sales_manager", "admin")
+
+
+def hash_password(password: str) -> str:
+    """Hash a password using stdlib scrypt with a random 16-byte salt."""
+    salt = os.urandom(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=16384,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Verify a plaintext password against a stored scrypt hash in constant time."""
+    parts = stored_hash.split("$")
+    if len(parts) != 3 or parts[0] != "scrypt":
+        return False
+    try:
+        salt = bytes.fromhex(parts[1])
+        expected = bytes.fromhex(parts[2])
+    except ValueError:
+        return False
+    actual = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=16384,
+        r=8,
+        p=1,
+        dklen=len(expected),
+    )
+    return hmac.compare_digest(actual, expected)
 
 
 class Actor(BaseModel):

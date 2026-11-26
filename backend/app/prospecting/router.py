@@ -25,6 +25,7 @@ from app.prospecting.service import (
     add_account_signal,
     apply_suppression,
     contact_to_out,
+    contacts_to_out,
     create_account,
     create_contact,
     deactivate_suppression,
@@ -32,6 +33,7 @@ from app.prospecting.service import (
     suppression_to_out,
     synthesize_account_research,
 )
+from app.retrieval.embeddings import EmbeddingService, get_embedding_service
 
 router = APIRouter(prefix="/prospecting", tags=["prospecting"])
 
@@ -98,9 +100,16 @@ async def add_signal_endpoint(
     body: SignalCreateIn,
     actor: Actor = Depends(require_roles("sdr", "sales_manager", "admin")),
     db: AsyncSession = Depends(get_db),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
 ) -> AccountSignal:
     """Record a verified public buying signal and refresh account scores."""
-    return await add_account_signal(db, account_id=account_id, payload=body, actor=actor)
+    return await add_account_signal(
+        db,
+        account_id=account_id,
+        payload=body,
+        actor=actor,
+        embedding_service=embedding_service,
+    )
 
 
 @router.post("/accounts/{account_id}/research", response_model=AccountResearchOut)
@@ -131,7 +140,7 @@ async def list_contacts(
     if not include_merged:
         stmt = stmt.where(Contact.status != "merged")
     contacts = list((await db.execute(stmt)).scalars().all())
-    return [await contact_to_out(db, contact) for contact in contacts]
+    return await contacts_to_out(db, contacts)
 
 
 @router.post("/contacts", response_model=ContactOut, status_code=status.HTTP_201_CREATED)

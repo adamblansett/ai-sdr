@@ -1,18 +1,22 @@
 import { useState, type FormEvent } from 'react';
-import { Ban, Building2, Plus, Sparkles, Upload, UserPlus } from 'lucide-react';
+import { Ban, BookOpen, Building2, Plus, Search, Sparkles, Upload, UserPlus } from 'lucide-react';
 import {
   addAccountSignal,
   addSuppression,
   createAccount,
   createContact,
+  createKnowledgeDocument,
   deactivateSuppression,
   importContactsCsv,
   researchAccount,
+  searchKnowledge,
 } from '../api/client';
 import type {
   AccountItem,
   ActorContext,
   ContactItem,
+  KnowledgeChunkItem,
+  KnowledgeSearchHit,
   SuppressionEntryItem,
 } from '../types/sdr';
 import { StatusBadge } from './StatusBadge';
@@ -22,6 +26,7 @@ interface ProspectingViewProps {
   accounts: AccountItem[];
   contacts: ContactItem[];
   suppressions: SuppressionEntryItem[];
+  knowledgeDocs: KnowledgeChunkItem[];
   onRefresh: () => Promise<void>;
   onNotify: (text: string, isError?: boolean) => void;
 }
@@ -31,6 +36,7 @@ export function ProspectingView({
   accounts,
   contacts,
   suppressions,
+  knowledgeDocs,
   onRefresh,
   onNotify,
 }: ProspectingViewProps) {
@@ -59,6 +65,12 @@ export function ProspectingView({
   const [supValue, setSupValue] = useState('');
   const [supReason, setSupReason] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const [docType, setDocType] = useState<'case_study' | 'playbook' | 'note'>('case_study');
+  const [docTitle, setDocTitle] = useState('');
+  const [docContent, setDocContent] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHits, setSearchHits] = useState<KnowledgeSearchHit[]>([]);
 
   const canWrite = actor.role !== 'viewer';
   const isManager = actor.role === 'sales_manager';
@@ -191,6 +203,34 @@ export function ProspectingView({
       await onRefresh();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Deactivate failed', true);
+    }
+  }
+
+  async function handleAddKnowledge(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await createKnowledgeDocument(actor, {
+        source_type: docType,
+        title: docTitle,
+        content: docContent,
+      });
+      setDocTitle('');
+      setDocContent('');
+      onNotify('Indexed knowledge chunk with dense embeddings.');
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Knowledge indexing failed', true);
+    }
+  }
+
+  async function handleSemanticSearch(e: FormEvent) {
+    e.preventDefault();
+    try {
+      const hits = await searchKnowledge(actor, { query: searchQuery, top_k: 4 });
+      setSearchHits(hits);
+      onNotify(`Found ${hits.length} semantic evidence match(es).`);
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Semantic search failed', true);
     }
   }
 
@@ -532,6 +572,92 @@ export function ProspectingView({
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-indigo-600" />
+          <h2 className="text-sm font-semibold text-slate-900">
+            Semantic Evidence Knowledge Base ({knowledgeDocs.length} indexed)
+          </h2>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <form onSubmit={handleAddKnowledge} className="space-y-2">
+            <div className="flex gap-2">
+              <select
+                value={docType}
+                onChange={(e) => setDocType(e.target.value as 'case_study' | 'playbook' | 'note')}
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+              >
+                <option value="case_study">case_study</option>
+                <option value="playbook">playbook</option>
+                <option value="note">note</option>
+              </select>
+              <input
+                required
+                placeholder="Case study or playbook title"
+                value={docTitle}
+                onChange={(e) => setDocTitle(e.target.value)}
+                className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+              />
+            </div>
+            <textarea
+              required
+              rows={2}
+              placeholder="Verified facts, metrics, or positioning snippet..."
+              value={docContent}
+              onChange={(e) => setDocContent(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 p-2.5 text-xs"
+            />
+            <button
+              type="submit"
+              disabled={!canWrite}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Index Knowledge Snippet
+            </button>
+          </form>
+
+          <div className="space-y-2">
+            <form onSubmit={handleSemanticSearch} className="flex gap-2">
+              <input
+                required
+                placeholder="Semantic query (e.g. Snowflake Series B SQL lift)"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+              />
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+              >
+                <Search className="h-3.5 w-3.5" />
+                Search Evidence
+              </button>
+            </form>
+            {searchHits.length > 0 && (
+              <ul className="space-y-1.5">
+                {searchHits.map((hit) => (
+                  <li
+                    key={hit.chunk.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-900">
+                        [{hit.chunk.source_type}] {hit.chunk.title}
+                      </span>
+                      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700">
+                        {Math.round(hit.score * 100)}% match
+                      </span>
+                    </div>
+                    <p className="mt-1 text-slate-600">{hit.chunk.content}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </section>
     </div>
   );

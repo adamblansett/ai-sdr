@@ -215,7 +215,9 @@ class SequenceTouch(Base):
     pii_redacted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -345,3 +347,117 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+class User(Base):
+    """Persisted workspace user for scrypt-hashed password authentication and RBAC."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    full_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="sdr", nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class InboundReply(Base):
+    """Classified prospect reply tied to outbound sequences and suppression automation."""
+
+    __tablename__ = "inbound_replies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    sequence_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("outreach_sequences.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    touch_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("sequence_touches.id", ondelete="SET NULL"), nullable=True
+    )
+    contact_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("contacts.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    sender_email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    subject: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    classification: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.85, nullable=False)
+    auto_action_taken: Mapped[str] = mapped_column(String(240), default="", nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class KnowledgeChunk(Base):
+    """Indexed account signal, case study, or playbook snippet with dense embedding."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    account_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("accounts.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    source_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_ref_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    embedding_json: Mapped[list[float]] = mapped_column(JSON, default=list, nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, default=384, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class CrmSyncJob(Base):
+    """Idempotent outbound CRM sync record to HubSpot, Salesforce, or mock connector."""
+
+    __tablename__ = "crm_sync_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(160), unique=True, index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    external_record_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    response_summary: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BackgroundJob(Base):
+    """Tracked background worker execution (inline or Celery-dispatched)."""
+
+    __tablename__ = "background_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    job_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    celery_task_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

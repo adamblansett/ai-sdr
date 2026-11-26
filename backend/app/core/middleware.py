@@ -1,12 +1,19 @@
+import time
 import uuid
 
+import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
+from app.core.telemetry import MetricsRegistry
+
+logger = structlog.get_logger(__name__)
+
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
 class SecurityHeadersMiddleware:
-    """Pure ASGI middleware injecting X-Request-ID and baseline security headers."""
+    """Pure ASGI middleware for request IDs, correlation logs, metrics, and security headers."""
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
@@ -25,9 +32,24 @@ class SecurityHeadersMiddleware:
                     request_id = candidate
                     break
         resolved_id = request_id or str(uuid.uuid4())
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["request_id"] = resolved_id
+
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=resolved_id)
+
+        path = str(scope.get("path", ""))
+        method = str(scope.get("method", ""))
+        started = time.perf_counter()
+        status_code = 500
+        app_obj = scope.get("app")
+        metrics = getattr(getattr(app_obj, "state", None), "metrics", None)
 
         async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
             if message["type"] == "http.response.start":
+                status_code = int(message.get("status", 200))
                 headers = list(message.get("headers") or [])
                 existing = {k.lower() for k, _ in headers}
 
@@ -44,6 +66,11 @@ class SecurityHeadersMiddleware:
                     b"permissions-policy",
                     b"camera=(), microphone=(), geolocation=()",
                 )
+                if not any(path.startswith(p) for p in _DOCS_PATHS):
+                    _set_header(
+                        b"content-security-policy",
+                        b"default-src 'none'; frame-ancestors 'none'",
+                    )
                 if self.settings.app_env.strip().lower() == "production":
                     _set_header(
                         b"strict-transport-security",
@@ -52,4 +79,21 @@ class SecurityHeadersMiddleware:
                 message = {**message, "headers": headers}
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            if isinstance(metrics, MetricsRegistry):
+                metrics.inc("http_requests_total")
+                if 400 <= status_code < 500:
+                    metrics.inc("http_4xx_total")
+                elif status_code >= 500:
+                    metrics.inc("http_5xx_total")
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            logger.debug(
+                "http_request_completed",
+                method=method,
+                path=path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+            )
+            structlog.contextvars.clear_contextvars()

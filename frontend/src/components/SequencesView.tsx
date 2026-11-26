@@ -1,15 +1,17 @@
 import { useState, type FormEvent } from 'react';
-import { Check, Edit3, Mail, Send, ShieldCheck, X } from 'lucide-react';
+import { Check, Edit3, Mail, MessageSquareReply, Send, ShieldCheck, X } from 'lucide-react';
 import {
   decideApproval,
   generateSequence,
   sendSequenceTouch,
+  simulateInboundReply,
   updateSequenceTouch,
 } from '../api/client';
 import type {
   AccountItem,
   ActorContext,
   ContactItem,
+  InboundReplyItem,
   SequenceItem,
   SequenceTouchItem,
 } from '../types/sdr';
@@ -20,6 +22,7 @@ interface SequencesViewProps {
   accounts: AccountItem[];
   contacts: ContactItem[];
   sequences: SequenceItem[];
+  replies: InboundReplyItem[];
   onRefresh: () => Promise<void>;
   onNotify: (text: string, isError?: boolean) => void;
 }
@@ -29,6 +32,7 @@ export function SequencesView({
   accounts,
   contacts,
   sequences,
+  replies,
   onRefresh,
   onNotify,
 }: SequencesViewProps) {
@@ -42,6 +46,10 @@ export function SequencesView({
   const [editingTouchId, setEditingTouchId] = useState<string | null>(null);
   const [editSubject, setEditSubject] = useState('');
   const [editBody, setEditBody] = useState('');
+
+  const [replySender, setReplySender] = useState('');
+  const [replySubject, setReplySubject] = useState('Re: Outbound workflow');
+  const [replyBody, setReplyBody] = useState('Interested — send times for a brief call next week.');
 
   const selectedAccountId = accountId || accounts[0]?.id || '';
   const eligibleContacts = contacts.filter((c) => c.account_id === selectedAccountId);
@@ -114,10 +122,30 @@ export function SequencesView({
   async function handleSend(touchId: string) {
     try {
       const res = await sendSequenceTouch(actor, touchId);
-      onNotify(`Sent touch (${res.provider_message_id}).`);
+      onNotify(`Sent touch via ${res.delivery_provider || 'mock'} (${res.provider_message_id}).`);
       await onRefresh();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Send failed', true);
+    }
+  }
+
+  async function handleSimulateReply(e: FormEvent) {
+    e.preventDefault();
+    const sender = replySender || contacts[0]?.email || '';
+    if (!sender) {
+      onNotify('Enter a sender email first.', true);
+      return;
+    }
+    try {
+      const res = await simulateInboundReply(actor, {
+        sender_email: sender,
+        subject: replySubject,
+        body: replyBody,
+      });
+      onNotify(`Reply classified as ${res.classification}: ${res.auto_action_taken}`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Reply classification failed', true);
     }
   }
 
@@ -345,6 +373,12 @@ export function SequencesView({
                           Grounded in: {touch.grounded_facts.join(' · ')}
                         </p>
                       )}
+                      {touch.status === 'sent' && (
+                        <p className="text-[11px] font-medium text-indigo-700">
+                          Dispatched via {touch.delivery_provider || 'mock'} · Message ID:{' '}
+                          {touch.provider_message_id}
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -352,6 +386,63 @@ export function SequencesView({
             </article>
           );
         })}
+      </section>
+
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <MessageSquareReply className="h-4 w-4 text-indigo-600" />
+          <h2 className="text-sm font-semibold text-slate-900">
+            Inbound Reply Classifier &amp; Opt-Out Automation ({replies.length})
+          </h2>
+        </div>
+
+        <form onSubmit={handleSimulateReply} className="space-y-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input
+              required
+              type="email"
+              placeholder="Prospect sender email"
+              value={replySender || contacts[0]?.email || ''}
+              onChange={(e) => setReplySender(e.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+            />
+            <input
+              placeholder="Reply subject"
+              value={replySubject}
+              onChange={(e) => setReplySubject(e.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+            />
+          </div>
+          <textarea
+            required
+            rows={2}
+            placeholder="Inbound reply body (e.g. 'Please unsubscribe me' or 'Interested!')"
+            value={replyBody}
+            onChange={(e) => setReplyBody(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 p-2.5 text-xs"
+          />
+          <button
+            type="submit"
+            disabled={!canWrite}
+            className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            Classify Inbound Reply
+          </button>
+        </form>
+
+        <ul className="divide-y divide-slate-100 text-xs">
+          {replies.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+              <div>
+                <p className="font-semibold text-slate-900">
+                  {r.sender_email} — {r.subject}
+                </p>
+                <p className="text-slate-600">{r.auto_action_taken}</p>
+              </div>
+              <StatusBadge value={r.classification} />
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

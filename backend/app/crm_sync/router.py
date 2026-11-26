@@ -7,26 +7,29 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Actor, get_current_actor, require_roles, resolve_request_settings
+from app.core.telemetry import MetricsRegistry
+from app.crm_sync.connectors import push_crm_sync, sync_job_to_out
 from app.crm_sync.hygiene import (
     candidate_to_out,
     create_deal,
     deal_to_out,
-    process_crm_webhook,
     scan_duplicate_contacts,
     synthesize_deal_next_step,
     validate_all_deals,
-    webhook_to_out,
 )
 from app.crm_sync.schemas import (
     CrmDealCreateIn,
     CrmDealOut,
+    CrmSyncJobOut,
+    CrmSyncPushIn,
     CrmWebhookEventOut,
     CrmWebhookPayloadIn,
     DeduplicateOut,
     DuplicateMergeCandidateOut,
     HygieneValidateOut,
 )
-from app.db.models import CrmDeal, CrmWebhookEvent, DuplicateMergeCandidate
+from app.crm_sync.webhooks import process_crm_webhook, webhook_to_out
+from app.db.models import CrmDeal, CrmSyncJob, CrmWebhookEvent, DuplicateMergeCandidate
 from app.db.session import get_db
 from app.llm.router import LLMRouter, get_llm_router
 
@@ -216,3 +219,40 @@ async def ingest_crm_webhook(
         actor=actor,
     )
     return webhook_to_out(event, duplicate_ignored=duplicate_ignored)
+
+
+@router.get("/sync/jobs", response_model=list[CrmSyncJobOut])
+async def list_crm_sync_jobs(
+    actor: Actor = Depends(get_current_actor),
+    db: AsyncSession = Depends(get_db),
+) -> list[CrmSyncJobOut]:
+    """List outbound CRM synchronization jobs."""
+    _ = actor
+    jobs = list(
+        (await db.execute(select(CrmSyncJob).order_by(CrmSyncJob.created_at.desc()).limit(50)))
+        .scalars()
+        .all()
+    )
+    return [sync_job_to_out(j) for j in jobs]
+
+
+@router.post("/sync/push", response_model=CrmSyncJobOut)
+async def push_crm_sync_endpoint(
+    body: CrmSyncPushIn,
+    request: Request,
+    actor: Actor = Depends(require_roles("sdr", "sales_manager", "admin")),
+    db: AsyncSession = Depends(get_db),
+) -> CrmSyncJobOut:
+    """Idempotently push a qualification, deal next step, or approved merge to CRM."""
+    settings = resolve_request_settings(request)
+    job = await push_crm_sync(
+        db,
+        operation=body.operation,
+        entity_id=body.entity_id,
+        settings=settings,
+        actor=actor,
+    )
+    metrics = getattr(request.app.state, "metrics", None)
+    if isinstance(metrics, MetricsRegistry):
+        metrics.inc("crm_sync_jobs_total")
+    return sync_job_to_out(job)

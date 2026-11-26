@@ -4,12 +4,18 @@ import type {
   ApprovalRequestItem,
   AuditChainVerify,
   AuditEventItem,
+  BackgroundJobItem,
   ContactItem,
   CrmDealItem,
+  CrmSyncJobItem,
   CrmWebhookEventItem,
   CsvImportResult,
   DuplicateCandidateItem,
   HealthStatus,
+  InboundReplyItem,
+  KnowledgeChunkItem,
+  KnowledgeSearchHit,
+  LoginResponse,
   OverviewSummary,
   PiiRedactionResult,
   QualificationItem,
@@ -25,7 +31,9 @@ async function requestJson<T>(
   init?: RequestInit,
 ): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (actor) {
+  if (actor?.token) {
+    headers.set('Authorization', `Bearer ${actor.token}`);
+  } else if (actor) {
     headers.set('X-Actor-Email', actor.email);
     headers.set('X-Actor-Role', actor.role);
   }
@@ -53,6 +61,13 @@ async function requestJson<T>(
 
 export function fetchHealth(): Promise<HealthStatus> {
   return requestJson<HealthStatus>('/api/v1/health');
+}
+
+export function loginUser(email: string, password: string): Promise<LoginResponse> {
+  return requestJson<LoginResponse>('/api/v1/auth/login', undefined, {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
 }
 
 export function fetchOverview(actor: ActorContext): Promise<OverviewSummary> {
@@ -189,6 +204,36 @@ export function deactivateSuppression(
   );
 }
 
+export function fetchKnowledgeDocuments(actor: ActorContext): Promise<KnowledgeChunkItem[]> {
+  return requestJson<KnowledgeChunkItem[]>('/api/v1/retrieval/documents', actor);
+}
+
+export function createKnowledgeDocument(
+  actor: ActorContext,
+  payload: {
+    account_id?: string | null;
+    source_type: 'case_study' | 'playbook' | 'signal' | 'note';
+    title: string;
+    content: string;
+    source_url?: string;
+  },
+): Promise<KnowledgeChunkItem> {
+  return requestJson<KnowledgeChunkItem>('/api/v1/retrieval/documents', actor, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function searchKnowledge(
+  actor: ActorContext,
+  payload: { query: string; account_id?: string | null; top_k?: number },
+): Promise<KnowledgeSearchHit[]> {
+  return requestJson<KnowledgeSearchHit[]>('/api/v1/retrieval/search', actor, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchQualifications(actor: ActorContext): Promise<QualificationItem[]> {
   return requestJson<QualificationItem[]>('/api/v1/qualification/records', actor);
 }
@@ -240,6 +285,20 @@ export function sendSequenceTouch(
 ): Promise<SequenceTouchItem> {
   return requestJson<SequenceTouchItem>(`/api/v1/sequences/touches/${touchId}/send`, actor, {
     method: 'POST',
+  });
+}
+
+export function fetchInboundReplies(actor: ActorContext): Promise<InboundReplyItem[]> {
+  return requestJson<InboundReplyItem[]>('/api/v1/sequences/replies', actor);
+}
+
+export function simulateInboundReply(
+  actor: ActorContext,
+  payload: { sender_email: string; subject: string; body: string },
+): Promise<InboundReplyItem> {
+  return requestJson<InboundReplyItem>('/api/v1/sequences/replies/inbound', actor, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 
@@ -315,6 +374,36 @@ export function simulateWebhook(
   });
 }
 
+export function fetchCrmSyncJobs(actor: ActorContext): Promise<CrmSyncJobItem[]> {
+  return requestJson<CrmSyncJobItem[]>('/api/v1/crm/sync/jobs', actor);
+}
+
+export function pushCrmSync(
+  actor: ActorContext,
+  payload: {
+    operation: 'qualification_sync' | 'deal_next_step_sync' | 'contact_merge_sync';
+    entity_id: string;
+  },
+): Promise<CrmSyncJobItem> {
+  return requestJson<CrmSyncJobItem>('/api/v1/crm/sync/push', actor, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchBackgroundJobs(actor: ActorContext): Promise<BackgroundJobItem[]> {
+  return requestJson<BackgroundJobItem[]>('/api/v1/workers/jobs', actor);
+}
+
+export function runBackgroundJob(
+  actor: ActorContext,
+  jobType: 'crm_hygiene_sweep' | 'sequence_followup_sweep',
+): Promise<BackgroundJobItem> {
+  return requestJson<BackgroundJobItem>(`/api/v1/workers/jobs/${jobType}/run`, actor, {
+    method: 'POST',
+  });
+}
+
 export function fetchApprovals(actor: ActorContext): Promise<ApprovalRequestItem[]> {
   return requestJson<ApprovalRequestItem[]>('/api/v1/audit/approvals', actor);
 }
@@ -347,4 +436,8 @@ export function previewPiiRedaction(
     method: 'POST',
     body: JSON.stringify({ text }),
   });
+}
+
+export function fetchMetrics(actor: ActorContext): Promise<Record<string, number>> {
+  return requestJson<Record<string, number>>('/api/v1/metrics', actor);
 }

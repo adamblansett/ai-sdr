@@ -1,8 +1,17 @@
 import { useState, type FormEvent } from 'react';
-import { AlertTriangle, GitMerge, Plus, RefreshCw, Sparkles, Webhook } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowUpRight,
+  GitMerge,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Webhook,
+} from 'lucide-react';
 import {
   createDeal,
   decideApproval,
+  pushCrmSync,
   scanDuplicates,
   simulateWebhook,
   synthesizeDealNextStep,
@@ -12,8 +21,10 @@ import type {
   AccountItem,
   ActorContext,
   CrmDealItem,
+  CrmSyncJobItem,
   CrmWebhookEventItem,
   DuplicateCandidateItem,
+  QualificationItem,
 } from '../types/sdr';
 import { StatusBadge } from './StatusBadge';
 
@@ -23,6 +34,8 @@ interface CrmHygieneViewProps {
   deals: CrmDealItem[];
   duplicates: DuplicateCandidateItem[];
   webhooks: CrmWebhookEventItem[];
+  qualifications: QualificationItem[];
+  syncJobs: CrmSyncJobItem[];
   onRefresh: () => Promise<void>;
   onNotify: (text: string, isError?: boolean) => void;
 }
@@ -33,6 +46,8 @@ export function CrmHygieneView({
   deals,
   duplicates,
   webhooks,
+  qualifications,
+  syncJobs,
   onRefresh,
   onNotify,
 }: CrmHygieneViewProps) {
@@ -44,6 +59,11 @@ export function CrmHygieneView({
   const [webhookSource, setWebhookSource] = useState('hubspot');
   const [webhookEventId, setWebhookEventId] = useState('demo-evt-1001');
   const [webhookEmail, setWebhookEmail] = useState('maya@acme.io');
+
+  const [syncOp, setSyncOp] = useState<
+    'deal_next_step_sync' | 'qualification_sync' | 'contact_merge_sync'
+  >('deal_next_step_sync');
+  const [syncEntityId, setSyncEntityId] = useState('');
 
   const canWrite = actor.role !== 'viewer';
   const isManager = actor.role === 'sales_manager';
@@ -135,6 +155,40 @@ export function CrmHygieneView({
       await onRefresh();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Webhook failed', true);
+    }
+  }
+
+  const syncTargets =
+    syncOp === 'deal_next_step_sync'
+      ? deals.map((d) => ({ id: d.id, label: `${d.name} (${d.stage})` }))
+      : syncOp === 'qualification_sync'
+      ? qualifications.map((q) => ({
+          id: q.id,
+          label: `${accountMap.get(q.account_id)?.name || q.account_id} (Grade ${q.grade})`,
+        }))
+      : duplicates
+          .filter((m) => m.status === 'merged')
+          .map((m) => ({ id: m.id, label: `${m.primary_email} ← ${m.duplicate_email}` }));
+  const resolvedSyncEntityId =
+    syncEntityId && syncTargets.some((t) => t.id === syncEntityId)
+      ? syncEntityId
+      : syncTargets[0]?.id || '';
+
+  async function handlePushSync(e: FormEvent) {
+    e.preventDefault();
+    if (!resolvedSyncEntityId) {
+      onNotify('No eligible entity available for selected CRM sync operation.', true);
+      return;
+    }
+    try {
+      const job = await pushCrmSync(actor, {
+        operation: syncOp,
+        entity_id: resolvedSyncEntityId,
+      });
+      onNotify(`CRM sync ${job.status}: ${job.response_summary}`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'CRM sync failed', true);
     }
   }
 
@@ -384,6 +438,70 @@ export function CrmHygieneView({
                 <p className="text-slate-600">{ev.result_summary}</p>
               </div>
               <StatusBadge value={ev.status} />
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <ArrowUpRight className="h-4 w-4 text-indigo-600" />
+          <h3 className="text-sm font-semibold text-slate-900">
+            Outbound CRM Sync Connector ({syncJobs.length})
+          </h3>
+        </div>
+        <form onSubmit={handlePushSync} className="flex flex-wrap gap-2">
+          <select
+            value={syncOp}
+            onChange={(e) => {
+              setSyncOp(
+                e.target.value as
+                  | 'deal_next_step_sync'
+                  | 'qualification_sync'
+                  | 'contact_merge_sync',
+              );
+              setSyncEntityId('');
+            }}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+          >
+            <option value="deal_next_step_sync">deal_next_step_sync</option>
+            <option value="qualification_sync">qualification_sync</option>
+            <option value="contact_merge_sync">contact_merge_sync</option>
+          </select>
+          <select
+            value={resolvedSyncEntityId}
+            onChange={(e) => setSyncEntityId(e.target.value)}
+            className="min-w-[220px] flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs"
+          >
+            {syncTargets.length === 0 ? (
+              <option value="">No eligible records</option>
+            ) : (
+              syncTargets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))
+            )}
+          </select>
+          <button
+            type="submit"
+            disabled={!canWrite || !resolvedSyncEntityId}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            Push CRM Sync
+          </button>
+        </form>
+        <ul className="divide-y divide-slate-100 text-xs">
+          {syncJobs.map((job) => (
+            <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <div>
+                <span className="font-semibold text-slate-900">
+                  [{job.provider}] {job.operation}
+                </span>
+                <span className="ml-2 text-slate-500">ext={job.external_record_id}</span>
+                <p className="text-slate-600">{job.response_summary}</p>
+              </div>
+              <StatusBadge value={job.status} />
             </li>
           ))}
         </ul>

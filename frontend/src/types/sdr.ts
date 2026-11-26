@@ -3,6 +3,7 @@ export type ActorRole = 'sales_manager' | 'sdr' | 'viewer';
 export interface ActorContext {
   email: string;
   role: ActorRole;
+  token?: string;
 }
 
 export interface HealthStatus {
@@ -13,6 +14,17 @@ export interface HealthStatus {
   environment: string;
   llm_provider: string;
   database?: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  actor: {
+    email: string;
+    role: ActorRole;
+    auth_method: string;
+  };
 }
 
 export interface OverviewSummary {
@@ -111,6 +123,24 @@ export interface CsvImportResult {
   errors: string[];
 }
 
+export interface KnowledgeChunkItem {
+  id: string;
+  account_id: string | null;
+  source_type: string;
+  source_ref_id: string | null;
+  title: string;
+  content: string;
+  source_url: string;
+  embedding_dim: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface KnowledgeSearchHit {
+  chunk: KnowledgeChunkItem;
+  score: number;
+}
+
 export interface RubricDimension {
   dimension: string;
   weight: number;
@@ -165,7 +195,9 @@ export interface SequenceTouchItem {
   pii_redacted: boolean;
   approved_by: string | null;
   approved_at: string | null;
+  scheduled_for?: string | null;
   sent_at: string | null;
+  delivery_provider?: string | null;
   provider_message_id: string | null;
   created_at: string;
 }
@@ -182,6 +214,20 @@ export interface SequenceItem {
   created_at: string;
   updated_at: string;
   touches: SequenceTouchItem[];
+}
+
+export interface InboundReplyItem {
+  id: string;
+  sequence_id: string | null;
+  touch_id: string | null;
+  contact_id: string | null;
+  sender_email: string;
+  subject: string;
+  body: string;
+  classification: string;
+  confidence: number;
+  auto_action_taken: string;
+  received_at: string;
 }
 
 export interface HygieneIssue {
@@ -235,6 +281,35 @@ export interface CrmWebhookEventItem {
   duplicate_ignored: boolean;
   received_at: string;
   processed_at: string;
+}
+
+export interface CrmSyncJobItem {
+  id: string;
+  provider: string;
+  operation: string;
+  entity_type: string;
+  entity_id: string;
+  idempotency_key: string;
+  status: string;
+  external_record_id: string | null;
+  response_summary: string;
+  attempts: number;
+  created_by: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface BackgroundJobItem {
+  id: string;
+  job_type: string;
+  execution_mode: string;
+  status: string;
+  celery_task_id: string | null;
+  result_json: Record<string, unknown>;
+  error_message: string | null;
+  requested_by: string;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface ApprovalRequestItem {

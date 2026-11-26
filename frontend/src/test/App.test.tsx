@@ -20,10 +20,22 @@ function buildApiMock() {
         status: 'ok',
         service: 'ai-sdr',
         app_name: 'AI SDR',
-        version: '0.1.0',
+        version: '0.2.0',
         environment: 'test',
         llm_provider: 'mock',
         database: 'ok',
+      });
+    }
+    if (url.endsWith('/api/v1/auth/login') && init?.method === 'POST') {
+      return jsonResponse({
+        access_token: 'header.payload.signature',
+        token_type: 'bearer',
+        expires_in: 3600,
+        actor: {
+          email: 'manager@acme-sdr.local',
+          role: 'sales_manager',
+          auth_method: 'bearer_token',
+        },
       });
     }
     if (url.endsWith('/api/v1/overview')) {
@@ -109,6 +121,41 @@ function buildApiMock() {
         },
       ]);
     }
+    if (url.endsWith('/api/v1/retrieval/documents')) {
+      return jsonResponse([
+        {
+          id: 'doc-1',
+          account_id: null,
+          source_type: 'case_study',
+          source_ref_id: null,
+          title: 'Series B Cloud Observability Case Study',
+          content: '38% SQL lift with Snowflake GTM signals.',
+          source_url: 'https://acme-sdr.local/cases/1',
+          embedding_dim: 384,
+          created_by: 'manager@acme-sdr.local',
+          created_at: '2026-11-24T00:00:00Z',
+        },
+      ]);
+    }
+    if (url.endsWith('/api/v1/retrieval/search') && init?.method === 'POST') {
+      return jsonResponse([
+        {
+          chunk: {
+            id: 'doc-1',
+            account_id: null,
+            source_type: 'case_study',
+            source_ref_id: null,
+            title: 'Series B Cloud Observability Case Study',
+            content: '38% SQL lift with Snowflake GTM signals.',
+            source_url: 'https://acme-sdr.local/cases/1',
+            embedding_dim: 384,
+            created_by: 'manager@acme-sdr.local',
+            created_at: '2026-11-24T00:00:00Z',
+          },
+          score: 0.86,
+        },
+      ]);
+    }
     if (url.endsWith('/api/v1/qualification/records')) {
       return jsonResponse([
         {
@@ -118,8 +165,20 @@ function buildApiMock() {
           icp_score: 88,
           intent_tier: 'high',
           grade: 'A',
-          bant: { budget: 'Series B allocated', authority: 'VP RevOps', need: 'Outbound automation', timeline: 'Q2' },
-          meddic: { metrics: '35% SQL lift', economic_buyer: 'Elena Rostova', decision_criteria: 'PII redaction', decision_process: 'Pilot', identify_pain: 'Manual research', champion: 'Elena Rostova' },
+          bant: {
+            budget: 'Series B allocated',
+            authority: 'VP RevOps',
+            need: 'Outbound automation',
+            timeline: 'Q2',
+          },
+          meddic: {
+            metrics: '35% SQL lift',
+            economic_buyer: 'Elena Rostova',
+            decision_criteria: 'PII redaction',
+            decision_process: 'Pilot',
+            identify_pain: 'Manual research',
+            champion: 'Elena Rostova',
+          },
           rubric_breakdown: [],
           evidence_citations: [
             {
@@ -172,13 +231,33 @@ function buildApiMock() {
               pii_redacted: false,
               approved_by: null,
               approved_at: null,
+              scheduled_for: null,
               sent_at: null,
+              delivery_provider: null,
               provider_message_id: null,
               created_at: '2026-11-24T00:00:00Z',
             },
           ],
         },
       ]);
+    }
+    if (url.endsWith('/api/v1/sequences/replies')) {
+      return jsonResponse([]);
+    }
+    if (url.endsWith('/api/v1/sequences/replies/inbound') && init?.method === 'POST') {
+      return jsonResponse({
+        id: 'rep-1',
+        sequence_id: 'seq-1',
+        touch_id: null,
+        contact_id: 'cnt-1',
+        sender_email: 'elena.rostova@helioscloud.io',
+        subject: 'Re: Outbound workflow',
+        body: 'Interested!',
+        classification: 'interested',
+        confidence: 0.91,
+        auto_action_taken: 'Paused sequence & updated deal activity for interested lead.',
+        received_at: '2026-11-24T00:00:00Z',
+      });
     }
     if (url.endsWith('/api/v1/crm/deals')) {
       return jsonResponse([
@@ -206,6 +285,53 @@ function buildApiMock() {
     }
     if (url.endsWith('/api/v1/crm/webhooks')) {
       return jsonResponse([]);
+    }
+    if (url.endsWith('/api/v1/crm/sync/jobs')) {
+      return jsonResponse([]);
+    }
+    if (url.endsWith('/api/v1/crm/sync/push') && init?.method === 'POST') {
+      return jsonResponse({
+        id: 'sync-1',
+        provider: 'mock',
+        operation: 'deal_next_step_sync',
+        entity_type: 'crm_deal',
+        entity_id: 'deal-1',
+        idempotency_key: 'mock:deal_next_step_sync:deal-1:abc',
+        status: 'synced',
+        external_record_id: 'crm-1234',
+        response_summary: 'Synced deal_next_step_sync via deterministic mock CRM connector.',
+        attempts: 1,
+        created_by: 'manager@acme-sdr.local',
+        created_at: '2026-11-24T00:00:00Z',
+        completed_at: '2026-11-24T00:00:00Z',
+      });
+    }
+    if (url.endsWith('/api/v1/workers/jobs')) {
+      return jsonResponse([]);
+    }
+    if (url.endsWith('/api/v1/workers/jobs/crm_hygiene_sweep/run') && init?.method === 'POST') {
+      return jsonResponse({
+        id: 'job-1',
+        job_type: 'crm_hygiene_sweep',
+        execution_mode: 'inline',
+        status: 'completed',
+        celery_task_id: null,
+        result_json: { deals_checked: 1, deals_flagged: 0, avg_hygiene_score: 100 },
+        error_message: null,
+        requested_by: 'manager@acme-sdr.local',
+        created_at: '2026-11-24T00:00:00Z',
+        completed_at: '2026-11-24T00:00:00Z',
+      });
+    }
+    if (url.endsWith('/api/v1/metrics')) {
+      return jsonResponse({
+        http_requests_total: 14,
+        llm_calls_total: 3,
+        touches_sent_total: 0,
+        replies_classified_total: 1,
+        crm_sync_jobs_total: 1,
+        rate_limit_blocked_total: 0,
+      });
     }
     if (url.endsWith('/api/v1/audit/approvals')) {
       return jsonResponse([
@@ -279,12 +405,12 @@ function buildApiMock() {
   });
 }
 
-describe('AI SDR Phase 1 workspace', () => {
+describe('AI SDR Phase 1–2 workspace', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('renders live API health, overview KPIs, and navigates all 6 modules', async () => {
+  it('renders live API health, JWT sign-in, and Phase 2 workflows across all 6 tabs', async () => {
     const mockFetch = buildApiMock();
     vi.stubGlobal('fetch', mockFetch);
     const user = userEvent.setup();
@@ -296,30 +422,56 @@ describe('AI SDR Phase 1 workspace', () => {
       expect(screen.getByText(/API Healthy \(mock\)/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Target Accounts & Signals')).toBeInTheDocument();
-    expect(screen.getByText(/Pending Human-in-the-Loop Approvals/i)).toBeInTheDocument();
 
+    // JWT Login modal flow
+    await user.click(screen.getByRole('button', { name: /Sign In/i }));
+    await user.click(screen.getByRole('button', { name: /Sign In Now/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/JWT: manager@acme-sdr\.local/i)).toBeInTheDocument();
+    });
+
+    // Prospecting + Semantic search
     await user.click(screen.getByRole('button', { name: /Prospecting/i }));
     expect(screen.getByText('Helios Cloud Systems')).toBeInTheDocument();
-    expect(screen.getByText(/Suppression & Opt-Out Compliance List/i)).toBeInTheDocument();
+    await user.type(
+      screen.getByPlaceholderText(/Semantic query/i),
+      'Snowflake SQL lift',
+    );
+    await user.click(screen.getByRole('button', { name: /Search Evidence/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/86% match/i)).toBeInTheDocument();
+    });
 
+    // Qualification
     await user.click(screen.getByRole('button', { name: /Qualification/i }));
     expect(screen.getByText(/BANT Extraction/i)).toBeInTheDocument();
-    expect(screen.getByText(/Closed \$42M Series B/i)).toBeInTheDocument();
 
+    // Sequences + Inbound reply classifier
     await user.click(screen.getByRole('button', { name: /Sequences & Approvals/i }));
     expect(screen.getByText(/Quick question on Helios Cloud Systems/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Classify Inbound Reply/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Reply classified as interested/i)).toBeInTheDocument();
+    });
 
+    // CRM Hygiene + Outbound CRM Sync
     await user.click(screen.getByRole('button', { name: /CRM Hygiene/i }));
     expect(screen.getByText('Helios Cloud Pilot')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Push CRM Sync/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/CRM sync synced/i)).toBeInTheDocument();
+    });
 
+    // Audit + PII Scrubbing + Background Worker Sweep + Approval
     await user.click(screen.getByRole('button', { name: /Audit & Guardrails/i }));
-    expect(screen.getByText(/Immutable SHA-256 Audit Trail/i)).toBeInTheDocument();
-
+    await user.click(screen.getByRole('button', { name: /Run CRM Hygiene Sweep/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Worker crm_hygiene_sweep \(inline\): completed/i)).toBeInTheDocument();
+    });
     await user.click(screen.getByRole('button', { name: /Test Cloud PII Scrubbing/i }));
     await waitFor(() => {
       expect(screen.getByText(/Reach \[REDACTED_EMAIL\] safely\./i)).toBeInTheDocument();
     });
-
     await user.click(screen.getByRole('button', { name: /^Approve$/i }));
     await waitFor(() => {
       expect(screen.getByText(/Approval approved\./i)).toBeInTheDocument();

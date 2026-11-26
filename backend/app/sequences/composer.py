@@ -1,4 +1,4 @@
-import uuid
+from datetime import timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import create_approval_request, record_audit_event
 from app.core.auth import Actor
+from app.core.config import get_settings
 from app.db.base import utcnow
 from app.db.models import (
     Account,
@@ -18,7 +19,10 @@ from app.db.models import (
     SequenceTouch,
 )
 from app.llm.router import LLMRouter
-from app.prospecting.service import check_contact_suppression
+from app.prospecting.suppression import check_contact_suppression
+from app.retrieval.embeddings import EmbeddingService
+from app.retrieval.service import search_knowledge
+from app.sequences.delivery import EmailDeliveryService
 from app.sequences.schemas import SequenceOut, SequenceTouchOut
 
 UNSUBSCRIBE_FOOTER = (
@@ -49,7 +53,9 @@ def touch_to_out(touch: SequenceTouch) -> SequenceTouchOut:
         pii_redacted=touch.pii_redacted,
         approved_by=touch.approved_by,
         approved_at=touch.approved_at,
+        scheduled_for=touch.scheduled_for,
         sent_at=touch.sent_at,
+        delivery_provider=touch.delivery_provider,
         provider_message_id=touch.provider_message_id,
         created_at=touch.created_at,
     )
@@ -99,6 +105,7 @@ async def generate_sequence(
     num_steps: int,
     llm_router: LLMRouter,
     actor: Actor,
+    embedding_service: EmbeddingService | None = None,
 ) -> tuple[OutreachSequence, list[SequenceTouch]]:
     """Generate a fact-grounded outbound sequence queued for human approval."""
     account = await db.get(Account, account_id)
@@ -177,6 +184,21 @@ async def generate_sequence(
             f"Qualification: Grade {latest_qual.grade} ({latest_qual.intent_tier} intent, "
             f"ICP {latest_qual.icp_score}/100)"
         )
+
+    emb_svc = embedding_service or EmbeddingService(get_settings())
+    semantic_hits = await search_knowledge(
+        db,
+        query=f"{account.industry} {goal} {contact.title}",
+        account_id=account.id,
+        top_k=2,
+        min_score=0.05,
+        embedding_service=emb_svc,
+    )
+    for hit in semantic_hits:
+        src_tag = hit.chunk.source_type.upper()
+        fact_line = f"{src_tag}: {hit.chunk.title} — {hit.chunk.content[:140]}"
+        if fact_line not in grounded_facts:
+            grounded_facts.append(fact_line)
 
     seq_name = name.strip() or f"{account.name} — {contact.first_name} {contact.last_name} Outbound"
     sequence = OutreachSequence(
@@ -368,6 +390,7 @@ async def send_approved_touch(
     *,
     touch_id: str,
     actor: Actor,
+    email_delivery: EmailDeliveryService | None = None,
 ) -> SequenceTouch:
     """Dispatch an approved outbound touch after re-validating suppression and footer."""
     touch = await db.get(SequenceTouch, touch_id)
@@ -428,9 +451,19 @@ async def send_approved_touch(
                 detail=f"Send blocked by active suppression list: {sup_reason}",
             )
 
+    dispatcher = email_delivery or EmailDeliveryService(get_settings())
+    recipient = contact.email if contact is not None else "unknown@invalid.local"
+    delivery_res = await dispatcher.send_email(
+        to_email=recipient,
+        subject=touch.subject,
+        body=touch.body,
+    )
+
+    now = utcnow()
     touch.status = "sent"
-    touch.sent_at = utcnow()
-    touch.provider_message_id = f"msg-{uuid.uuid4().hex[:12]}"
+    touch.sent_at = now
+    touch.delivery_provider = delivery_res.provider
+    touch.provider_message_id = delivery_res.message_id
 
     all_touches = list(
         (
@@ -441,6 +474,9 @@ async def send_approved_touch(
         .scalars()
         .all()
     )
+    for upcoming in all_touches:
+        if upcoming.step_number > touch.step_number and upcoming.status != "sent":
+            upcoming.scheduled_for = now + timedelta(days=upcoming.delay_days)
     if all(t.status == "sent" for t in all_touches):
         sequence.status = "completed"
     else:

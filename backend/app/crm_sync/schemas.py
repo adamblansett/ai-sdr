@@ -111,3 +111,28 @@ class CrmWebhookEventOut(BaseModel):
     duplicate_ignored: bool = False
     received_at: datetime
     processed_at: datetime
+
+
+class CrmSyncPushIn(BaseModel):
+    """Request payload to push an AI SDR record to outbound CRM connector."""
+
+    operation: Literal["qualification_sync", "deal_next_step_sync", "contact_merge_sync"]
+    entity_id: str = Field(..., min_length=1, max_length=64)
+
+
+class CrmSyncJobOut(BaseModel):
+    """Serialized outbound CRM sync job."""
+
+    id: str
+    provider: str
+    operation: str
+    entity_type: str
+    entity_id: str
+    idempotency_key: str
+    status: str
+    external_record_id: str | None
+    response_summary: str
+    attempts: int
+    created_by: str
+    created_at: datetime
+    completed_at: datetime | None

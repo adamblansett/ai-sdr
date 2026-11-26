@@ -1,11 +1,17 @@
 import { useState, type FormEvent } from 'react';
-import { Check, EyeOff, ShieldCheck, X } from 'lucide-react';
-import { decideApproval, previewPiiRedaction, verifyAuditChain } from '../api/client';
+import { Activity, Check, Cpu, EyeOff, ShieldCheck, X } from 'lucide-react';
+import {
+  decideApproval,
+  previewPiiRedaction,
+  runBackgroundJob,
+  verifyAuditChain,
+} from '../api/client';
 import type {
   ActorContext,
   ApprovalRequestItem,
   AuditChainVerify,
   AuditEventItem,
+  BackgroundJobItem,
   PiiRedactionResult,
 } from '../types/sdr';
 import { StatusBadge } from './StatusBadge';
@@ -14,6 +20,8 @@ interface AuditViewProps {
   actor: ActorContext;
   approvals: ApprovalRequestItem[];
   events: AuditEventItem[];
+  backgroundJobs: BackgroundJobItem[];
+  metrics: Record<string, number> | null;
   chainStatus: AuditChainVerify | null;
   onChainVerified: (status: AuditChainVerify) => void;
   onRefresh: () => Promise<void>;
@@ -24,6 +32,8 @@ export function AuditView({
   actor,
   approvals,
   events,
+  backgroundJobs,
+  metrics,
   chainStatus,
   onChainVerified,
   onRefresh,
@@ -63,6 +73,18 @@ export function AuditView({
       setPiiResult(res);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'PII preview failed', true);
+    }
+  }
+
+  async function handleRunWorker(
+    jobType: 'crm_hygiene_sweep' | 'sequence_followup_sweep',
+  ) {
+    try {
+      const job = await runBackgroundJob(actor, jobType);
+      onNotify(`Worker ${job.job_type} (${job.execution_mode}): ${job.status}`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Background job failed', true);
     }
   }
 
@@ -205,6 +227,65 @@ export function AuditView({
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-indigo-600" />
+            <h2 className="text-sm font-semibold text-slate-900">
+              Background Workers &amp; Operational Metrics ({backgroundJobs.length})
+            </h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={actor.role === 'viewer'}
+              onClick={() => handleRunWorker('crm_hygiene_sweep')}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Run CRM Hygiene Sweep
+            </button>
+            <button
+              type="button"
+              disabled={actor.role === 'viewer'}
+              onClick={() => handleRunWorker('sequence_followup_sweep')}
+              className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              Run Follow-up Sweep
+            </button>
+          </div>
+        </div>
+
+        {metrics && (
+          <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {Object.entries(metrics).map(([k, v]) => (
+              <div key={k} className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                <p className="truncate text-[10px] font-medium text-slate-500">{k}</p>
+                <p className="mt-0.5 flex items-center gap-1 text-sm font-bold text-slate-900">
+                  <Activity className="h-3 w-3 text-indigo-500" />
+                  {v}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <ul className="divide-y divide-slate-100 text-xs">
+          {backgroundJobs.map((job) => (
+            <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <div>
+                <span className="font-semibold text-slate-900">
+                  {job.job_type} [{job.execution_mode}]
+                </span>
+                <span className="ml-2 text-slate-500">
+                  {JSON.stringify(job.result_json)}
+                </span>
+              </div>
+              <StatusBadge value={job.status} />
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

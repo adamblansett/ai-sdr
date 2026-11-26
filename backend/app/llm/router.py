@@ -6,6 +6,8 @@ from fastapi import Request
 from pydantic import BaseModel
 
 from app.core.config import Settings
+from app.core.resilience import async_retry_with_backoff
+from app.core.telemetry import MetricsRegistry, start_span
 from app.llm.pii import redact_pii
 
 logger = structlog.get_logger(__name__)
@@ -142,14 +144,17 @@ class OllamaLLMAdapter:
             "system": system_prompt,
             "stream": False,
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(f"{self.base_url}/api/generate", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            text = str(data.get("response", "")).strip()
-            if not text:
-                raise RuntimeError("Ollama returned an empty response.")
-            return text
+        async def _call() -> str:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(f"{self.base_url}/api/generate", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                text = str(data.get("response", "")).strip()
+                if not text:
+                    raise RuntimeError("Ollama returned an empty response.")
+                return text
+
+        return await async_retry_with_backoff(_call, max_attempts=2)
 
 
 class GeminiLLMAdapter:
@@ -173,29 +178,33 @@ class GeminiLLMAdapter:
         body = {
             "contents": [{"role": "user", "parts": [{"text": combined}]}],
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                url,
-                params={"key": self.api_key},
-                json=body,
-            )
-            response.raise_for_status()
-            data = response.json()
-        candidates = data.get("candidates") or []
-        if not candidates:
-            raise RuntimeError("Gemini returned no candidates.")
-        parts = candidates[0].get("content", {}).get("parts", [])
-        text = "".join(str(p.get("text", "")) for p in parts).strip()
-        if not text:
-            raise RuntimeError("Gemini returned empty candidate text.")
-        return text
+        async def _call() -> str:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    url,
+                    params={"key": self.api_key},
+                    json=body,
+                )
+                response.raise_for_status()
+                data = response.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                raise RuntimeError("Gemini returned no candidates.")
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text = "".join(str(p.get("text", "")) for p in parts).strip()
+            if not text:
+                raise RuntimeError("Gemini returned empty candidate text.")
+            return text
+
+        return await async_retry_with_backoff(_call, max_attempts=2)
 
 
 class LLMRouter:
     """Routes LLM tasks across mock, local Ollama, and PII-redacted cloud Gemini."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, metrics: MetricsRegistry | None = None) -> None:
         self.settings = settings
+        self.metrics = metrics
         self.adapters: dict[str, LLMAdapter] = {
             "mock": MockLLMAdapter(),
             "ollama": OllamaLLMAdapter(
@@ -243,11 +252,18 @@ class LLMRouter:
                 redacted = True
 
             try:
-                content = await adapter.generate(
-                    prompt=outbound_prompt,
-                    system_prompt=outbound_system,
-                    task_type=task_type,
-                )
+                with start_span(
+                    "llm.generate",
+                    enabled=self.settings.otel_enabled,
+                    attributes={"provider": provider_name, "task_type": task_type},
+                ):
+                    content = await adapter.generate(
+                        prompt=outbound_prompt,
+                        system_prompt=outbound_system,
+                        task_type=task_type,
+                    )
+                if self.metrics is not None:
+                    self.metrics.inc("llm_calls_total")
                 return LLMResponse(
                     content=content,
                     provider=adapter.provider_name,

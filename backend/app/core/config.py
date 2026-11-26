@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./ai_sdr.db"
     auto_create_tables: bool = True
     seed_demo_data: bool = False
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
+    redis_url: str = ""
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    task_execution_mode: Literal["inline", "celery"] = "inline"
 
     llm_default_provider: Literal["mock", "ollama", "gemini"] = "mock"
     llm_fallback_providers: str = "ollama,gemini,mock"
@@ -35,9 +44,30 @@ class Settings(BaseSettings):
     gemini_default_model: str = "gemini-2.5-flash"
     llm_redact_pii_for_cloud: bool = True
 
+    embedding_provider: Literal["deterministic", "ollama"] = "deterministic"
+    embedding_dimensions: int = 384
+
+    email_provider: Literal["mock", "smtp", "resend", "sendgrid"] = "mock"
+    email_from_address: str = "sdr@acme-sdr.local"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    resend_api_key: str = ""
+    sendgrid_api_key: str = ""
+
+    crm_outbound_provider: Literal["mock", "hubspot", "salesforce"] = "mock"
+    hubspot_api_key: str = ""
+    salesforce_instance_url: str = ""
+    salesforce_access_token: str = ""
+
     auth_secret_key: str = _DEFAULT_DEV_SECRET
     auth_require_token: bool = False
     webhook_signing_secret: str = ""
+    rate_limit_enabled: bool = False
+    rate_limit_requests_per_minute: int = 120
+    otel_enabled: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

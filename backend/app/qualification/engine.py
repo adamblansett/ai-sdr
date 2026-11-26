@@ -7,9 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record_audit_event
 from app.core.auth import Actor
+from app.core.config import get_settings
 from app.db.models import Account, AccountSignal, Contact, QualificationRecord
 from app.llm.router import LLMRouter
-from app.prospecting.service import (
+from app.prospecting.suppression import (
     _TARGET_INDUSTRIES,
     _TARGET_STACK,
     check_account_suppression,
@@ -21,6 +22,8 @@ from app.qualification.schemas import (
     RubricDimensionOut,
     RubricWeightsIn,
 )
+from app.retrieval.embeddings import EmbeddingService
+from app.retrieval.service import search_knowledge
 
 
 def qualification_to_out(record: QualificationRecord) -> QualificationOut:
@@ -182,6 +185,7 @@ async def evaluate_lead(
     rubric_weights: RubricWeightsIn | None,
     llm_router: LLMRouter,
     actor: Actor,
+    embedding_service: EmbeddingService | None = None,
 ) -> QualificationRecord:
     """Evaluate ICP fit, buying intent, and BANT/MEDDIC with verified signal citations."""
     account = await db.get(Account, account_id)
@@ -232,6 +236,30 @@ async def evaluate_lead(
         }
         for sig in signals
     ]
+    cited_ids = {sig.id for sig in signals}
+    emb_svc = embedding_service or EmbeddingService(get_settings())
+    semantic_hits = await search_knowledge(
+        db,
+        query=f"{account.name} {account.industry} {discovery_notes[:300]}",
+        account_id=account.id,
+        top_k=2,
+        min_score=0.05,
+        embedding_service=emb_svc,
+    )
+    for hit in semantic_hits:
+        ref_id = hit.chunk.source_ref_id or hit.chunk.id
+        if ref_id not in cited_ids:
+            cited_ids.add(ref_id)
+            citations.append(
+                {
+                    "signal_id": ref_id,
+                    "signal_type": hit.chunk.source_type,
+                    "title": hit.chunk.title,
+                    "source_url": hit.chunk.source_url,
+                    "excerpt": hit.chunk.content[:260],
+                    "confidence": hit.score,
+                }
+            )
 
     if suppressed:
         account.icp_fit_score = 0

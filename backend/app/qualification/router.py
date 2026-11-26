@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.llm.router import LLMRouter, get_llm_router
 from app.qualification.engine import evaluate_lead, qualification_to_out
 from app.qualification.schemas import EvaluateLeadIn, QualificationOut
+from app.retrieval.embeddings import EmbeddingService, get_embedding_service
 
 router = APIRouter(prefix="/qualification", tags=["qualification"])
 
@@ -40,6 +41,7 @@ async def evaluate_lead_endpoint(
     actor: Actor = Depends(require_roles("sdr", "sales_manager", "admin")),
     db: AsyncSession = Depends(get_db),
     llm_router: LLMRouter = Depends(get_llm_router),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
 ) -> QualificationOut:
     """Run rubric ICP scoring and BANT/MEDDIC extraction for an account/contact."""
     record = await evaluate_lead(
@@ -50,5 +52,6 @@ async def evaluate_lead_endpoint(
         rubric_weights=body.rubric_weights,
         llm_router=llm_router,
         actor=actor,
+        embedding_service=embedding_service,
     )
     return qualification_to_out(record)

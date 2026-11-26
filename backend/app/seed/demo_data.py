@@ -8,8 +8,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record_audit_event
-from app.core.auth import Actor
+from app.core.auth import Actor, hash_password
 from app.core.config import Settings
+from app.crm_sync.connectors import push_crm_sync
 from app.crm_sync.hygiene import scan_duplicate_contacts, validate_deal_hygiene
 from app.db.base import utcnow
 from app.db.models import (
@@ -17,19 +18,28 @@ from app.db.models import (
     AccountSignal,
     ApprovalRequest,
     AuditEvent,
+    BackgroundJob,
     Contact,
     CrmDeal,
+    CrmSyncJob,
     CrmWebhookEvent,
     DuplicateMergeCandidate,
+    InboundReply,
+    KnowledgeChunk,
     OutreachSequence,
     QualificationRecord,
     SequenceTouch,
     SuppressionEntry,
+    User,
 )
 from app.llm.router import LLMRouter
 from app.prospecting.service import compute_account_scores
 from app.qualification.engine import evaluate_lead
+from app.retrieval.embeddings import EmbeddingService
+from app.retrieval.service import index_knowledge_chunk
 from app.sequences.composer import generate_sequence
+from app.sequences.replies import ingest_inbound_reply
+from app.workers.tasks import dispatch_background_job
 
 
 async def seed_demo_dataset(
@@ -46,6 +56,10 @@ async def seed_demo_dataset(
         for model in (
             AuditEvent,
             ApprovalRequest,
+            BackgroundJob,
+            CrmSyncJob,
+            InboundReply,
+            KnowledgeChunk,
             CrmWebhookEvent,
             DuplicateMergeCandidate,
             CrmDeal,
@@ -56,6 +70,7 @@ async def seed_demo_dataset(
             Contact,
             SuppressionEntry,
             Account,
+            User,
         ):
             await db.execute(delete(model))
         await db.commit()
@@ -65,6 +80,33 @@ async def seed_demo_dataset(
             return {"seeded": False, "message": "Demo dataset already present."}
 
     now = utcnow()
+    demo_pw_hash = hash_password("DemoPassword123!")
+    db.add_all(
+        [
+            User(
+                email="manager@acme-sdr.local",
+                full_name="Morgan Hayes",
+                role="sales_manager",
+                password_hash=demo_pw_hash,
+                active=True,
+            ),
+            User(
+                email="sdr@acme-sdr.local",
+                full_name="Taylor Brooks",
+                role="sdr",
+                password_hash=demo_pw_hash,
+                active=True,
+            ),
+            User(
+                email="viewer@acme-sdr.local",
+                full_name="Casey Reed",
+                role="viewer",
+                password_hash=demo_pw_hash,
+                active=True,
+            ),
+        ]
+    )
+    await db.flush()
 
     helios = Account(
         name="Helios Cloud Systems",
@@ -312,6 +354,52 @@ async def seed_demo_dataset(
     db.add_all([sup_email, sup_domain])
     await db.commit()
 
+    emb_service = EmbeddingService(settings)
+    await index_knowledge_chunk(
+        db,
+        account_id=None,
+        source_type="case_study",
+        source_ref_id=None,
+        title="Series B Cloud Observability Case Study — 38% SQL Lift",
+        content=(
+            "Automated RevOps signal enrichment and human-approved multi-touch outbound "
+            "increased enterprise SQL conversion by 38% while enforcing zero-PII cloud fallback."
+        ),
+        source_url="https://acme-sdr.local/case-studies/cloud-observability",
+        embedding_service=emb_service,
+        actor=actor,
+        commit=False,
+    )
+    await index_knowledge_chunk(
+        db,
+        account_id=None,
+        source_type="playbook",
+        source_ref_id=None,
+        title="HealthTech HIPAA & Local Ollama Deployment Playbook",
+        content=(
+            "Deploy self-hosted Ollama inference with strict outbound PII scrubbing, "
+            "unsubscribe compliance footers, and manager approval queues."
+        ),
+        source_url="https://acme-sdr.local/playbooks/healthtech-pii",
+        embedding_service=emb_service,
+        actor=actor,
+        commit=False,
+    )
+    for sig in signals:
+        await index_knowledge_chunk(
+            db,
+            account_id=sig.account_id,
+            source_type="signal",
+            source_ref_id=sig.id,
+            title=sig.title,
+            content=sig.evidence_excerpt or sig.summary,
+            source_url=sig.source_url,
+            embedding_service=emb_service,
+            actor=actor,
+            commit=False,
+        )
+    await db.commit()
+
     await evaluate_lead(
         db,
         account_id=helios.id,
@@ -412,6 +500,29 @@ async def seed_demo_dataset(
     )
     db.add(webhook_ev)
     await db.flush()
+
+    await ingest_inbound_reply(
+        db,
+        sender_email=priya.email,
+        subject="Re: HIPAA-safe outbound workflow",
+        body="Interested in comparing notes — please send times for a quick demo next Tuesday.",
+        sequence_id=None,
+        touch_id=None,
+        actor=actor,
+    )
+    await push_crm_sync(
+        db,
+        operation="deal_next_step_sync",
+        entity_id=deal_helios.id,
+        settings=settings,
+        actor=actor,
+    )
+    await dispatch_background_job(
+        db,
+        job_type="crm_hygiene_sweep",
+        settings=settings,
+        actor=actor,
+    )
 
     await record_audit_event(
         db,
